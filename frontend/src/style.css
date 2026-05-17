@@ -1,0 +1,42 @@
+/*
+ * Global styles for SnapGo.
+ *
+ * Design rationale:
+ * - The native window/webview is transparent so the capture overlay can show
+ *   the live desktop through its selection cut-out.
+ * - SettingsView remains opaque because App.vue paints `.app-root` across
+ *   the whole window.
+ */
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI Variable", "Inter", sans-serif;
+  font-size: 14px;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent;
+  color: #111827;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body {
+    background: transparent;
+    color: #e5e7eb;
+  }
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font-family: inherit;
+}

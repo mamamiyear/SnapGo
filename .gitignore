@@ -16,3 +16,6 @@ scripts/secrets.sh
 # IDE
 .trae/
 .vscode/
+
+# OS
+*.DS_Store

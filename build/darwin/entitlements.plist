@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hardened Runtime entitlements for SnapGo on macOS.
+
+  Design rationale:
+  - Hardened Runtime is REQUIRED for notarization (Apple Notary Service).
+  - We deliberately keep entitlements MINIMAL: only what the screenshot tool
+    actually needs. Granting more increases attack surface and slows review.
+  - JIT / unsigned-executable-memory is enabled because the embedded WebView
+    (WKWebView via wails) needs JS JIT.
+  - We do NOT enable App Sandbox: the app uses /usr/sbin/screencapture and a
+    global hotkey that requires non-sandboxed access. (App Sandbox + screen
+    recording requires extra plumbing not in MVP scope.)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Allow JIT for WKWebView JavaScript engine -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Allow unsigned executable memory pages used by JIT -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Allow loading dylibs not signed by the same team (Wails runtime needs this on some setups) -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Outbound network for S3 / OSS uploads -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!--
+        Apple Events: required to invoke /usr/sbin/screencapture and to query
+        display info via system_profiler. Combined with NSAppleEventsUsageDescription
+        in Info.plist, this triggers the standard TCC prompt.
+    -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>
