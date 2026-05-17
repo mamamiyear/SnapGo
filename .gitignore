@@ -1,0 +1,18 @@
+build/bin
+node_modules
+frontend/dist
+
+# macOS release artifacts
+*.dmg
+*.dmg.cdr
+*.zip
+
+# Local secrets for signing / notarization (developer machines only)
+.env
+.env.local
+scripts/.env
+scripts/secrets.sh
+
+# IDE
+.trae/
+.vscode/
