@@ -62,17 +62,24 @@ async function retryHotkey() {
 }
 
 async function onOverlayConfirm(rect: {
-  x: number
-  y: number
-  w: number
-  h: number
+  rect: {
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+  annotations: Array<{
+    tool: string
+    color: string
+    points: Array<{ x: number; y: number }>
+  }>
 }) {
   // Optimistically swap back so the window does not visually lag the
   // Go-side hide. If upload fails, the toast surfaces the reason.
   mode.value = 'settings'
   overlayPayload.value = null
   try {
-    await ConfirmRegion(rect)
+    await ConfirmRegion(rect as any)
   } catch {
     /* Surfaced via upload:failure */
   }

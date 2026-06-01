@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"log/slog"
@@ -43,11 +44,11 @@ type App struct {
 
 	// capturing prevents re-entrant capture sessions when the user mashes
 	// the hotkey while a previous one is still running. It stays true for
-// the entire lifecycle of one capture: from overlay start until the
+	// the entire lifecycle of one capture: from overlay start until the
 	// overlay is either confirmed (ConfirmRegion) or discarded (CancelRegion).
 	capturing atomic.Bool
 
-// pendingMu guards `pending`. We keep this separate from `mu` so that
+	// pendingMu guards `pending`. We keep this separate from `mu` so that
 	// frontend-triggered RPC handlers (which may run concurrently with the
 	// capture goroutine) can take it cheaply.
 	pendingMu sync.Mutex
@@ -78,6 +79,13 @@ type RegionRect struct {
 	Y int `json:"y"`
 	W int `json:"w"`
 	H int `json:"h"`
+}
+
+// CaptureResult is returned by the overlay with the final selection and any
+// annotations drawn inside the selected area.
+type CaptureResult struct {
+	Rect        RegionRect               `json:"rect"`
+	Annotations []application.Annotation `json:"annotations"`
 }
 
 // NewApp creates a new App with collaborators already initialised.
@@ -357,7 +365,7 @@ func (a *App) CaptureNow() {
 // Returning the error to the frontend lets the overlay decide whether to
 // keep showing the screenshot (e.g. for a retry) — currently it just
 // dismisses regardless and surfaces the error via the upload:failure toast.
-func (a *App) ConfirmRegion(rect RegionRect) error {
+func (a *App) ConfirmRegion(result CaptureResult) error {
 	a.pendingMu.Lock()
 	pc := a.pending
 	a.pending = nil
@@ -371,6 +379,7 @@ func (a *App) ConfirmRegion(rect RegionRect) error {
 		a.dismissOverlay()
 	}()
 
+	rect := result.Rect
 	captureRect := image.Rect(rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
 	a.dismissOverlay()
 	flushFrame()
@@ -379,6 +388,13 @@ func (a *App) ConfirmRegion(rect RegionRect) error {
 	if err != nil {
 		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
 		return err
+	}
+	if len(result.Annotations) > 0 {
+		cropped, err = application.ApplyAnnotations(cropped, result.Annotations, pc.Display.Scale)
+		if err != nil {
+			wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+			return err
+		}
 	}
 	if err := a.runUploadPipeline(pc.Provider, cropped); err != nil {
 		return err
@@ -389,7 +405,7 @@ func (a *App) ConfirmRegion(rect RegionRect) error {
 // ConfirmNativeRegion mirrors ConfirmRegion for the macOS native overlay.
 // The native AppKit panel has already been closed by the time this method is
 // called, so we must not dismiss/restore the Wails overlay window here.
-func (a *App) ConfirmNativeRegion(rect RegionRect) error {
+func (a *App) ConfirmNativeRegion(result CaptureResult) error {
 	a.pendingMu.Lock()
 	pc := a.pending
 	a.pending = nil
@@ -403,6 +419,7 @@ func (a *App) ConfirmNativeRegion(rect RegionRect) error {
 		hideDockIcon()
 	}()
 
+	rect := result.Rect
 	captureRect := image.Rect(rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
 	flushFrame()
 	cropped, err := a.capturer.CaptureRegion(captureRect)
@@ -410,7 +427,26 @@ func (a *App) ConfirmNativeRegion(rect RegionRect) error {
 		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
 		return err
 	}
+	if len(result.Annotations) > 0 {
+		cropped, err = application.ApplyAnnotations(cropped, result.Annotations, pc.Display.Scale)
+		if err != nil {
+			wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+			return err
+		}
+	}
 	return a.runUploadPipeline(pc.Provider, cropped)
+}
+
+func parseNativeAnnotations(raw string) []application.Annotation {
+	if raw == "" {
+		return nil
+	}
+	var annotations []application.Annotation
+	if err := json.Unmarshal([]byte(raw), &annotations); err != nil {
+		slog.Warn("parse native annotations failed", "err", err)
+		return nil
+	}
+	return annotations
 }
 
 // CancelRegion is invoked when the user dismisses the overlay (Esc /

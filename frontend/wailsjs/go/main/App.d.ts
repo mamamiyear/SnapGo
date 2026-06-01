@@ -9,9 +9,9 @@ export function CancelRegion():Promise<void>;
 
 export function CaptureNow():Promise<void>;
 
-export function ConfirmNativeRegion(arg1:main.RegionRect):Promise<void>;
+export function ConfirmNativeRegion(arg1:main.CaptureResult):Promise<void>;
 
-export function ConfirmRegion(arg1:main.RegionRect):Promise<void>;
+export function ConfirmRegion(arg1:main.CaptureResult):Promise<void>;
 
 export function GetConfig():Promise<domain.AppConfig>;
 

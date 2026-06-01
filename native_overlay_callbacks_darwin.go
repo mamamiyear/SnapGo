@@ -5,7 +5,7 @@ package main
 import "C"
 
 //export nativeOverlayConfirm
-func nativeOverlayConfirm(x, y, w, h C.int) {
+func nativeOverlayConfirm(x, y, w, h C.int, annotationsJSON *C.char) {
 	nativeOverlayState.Lock()
 	app := nativeOverlayState.app
 	nativeOverlayState.app = nil
@@ -13,12 +13,16 @@ func nativeOverlayConfirm(x, y, w, h C.int) {
 	if app == nil {
 		return
 	}
+	rawAnnotations := C.GoString(annotationsJSON)
 	go func() {
-		_ = app.ConfirmNativeRegion(RegionRect{
-			X: int(x),
-			Y: int(y),
-			W: int(w),
-			H: int(h),
+		_ = app.ConfirmNativeRegion(CaptureResult{
+			Rect: RegionRect{
+				X: int(x),
+				Y: int(y),
+				W: int(w),
+				H: int(h),
+			},
+			Annotations: parseNativeAnnotations(rawAnnotations),
 		})
 	}()
 }
