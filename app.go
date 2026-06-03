@@ -88,6 +88,13 @@ type CaptureResult struct {
 	Annotations []application.Annotation `json:"annotations"`
 }
 
+// CaptureActionResult tells the frontend whether an action was completed or
+// the user cancelled a secondary choice such as the save destination dialog.
+type CaptureActionResult struct {
+	Completed bool   `json:"completed"`
+	Path      string `json:"path,omitempty"`
+}
+
 // NewApp creates a new App with collaborators already initialised.
 func NewApp() *App {
 	store, err := config.NewFileStore()
@@ -169,17 +176,13 @@ func (a *App) runInteractiveCapture() {
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	if !cfg.IsS3Configured() {
-		a.surfaceWindow()
-		wruntime.EventsEmit(a.ctx, "upload:failure",
-			"S3 is not configured yet — open settings first")
-		return
-	}
-	provider, err := oss.NewS3Provider(cfg.S3)
-	if err != nil {
-		a.surfaceWindow()
-		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
-		return
+	var provider domain.OSSProvider
+	if cfg.IsS3Configured() {
+		var err error
+		provider, err = oss.NewS3Provider(cfg.S3)
+		if err != nil {
+			wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		}
 	}
 
 	// Hide the settings window before transforming it into an overlay, so
@@ -296,6 +299,58 @@ func (a *App) runUploadPipeline(provider domain.OSSProvider, pngBytes []byte) er
 	return svc.ExecuteWithBytes(a.ctx, pngBytes)
 }
 
+func (a *App) runCopyImagePipeline(pngBytes []byte) error {
+	svc := &application.CaptureActionsService{
+		Clipboard: a.clip,
+		Notifier:  &runtimeNotifier{ctx: a.ctx},
+	}
+	return svc.CopyImage(a.ctx, pngBytes)
+}
+
+func (a *App) runSaveImagePipeline(pngBytes []byte, dir string) (string, error) {
+	svc := &application.CaptureActionsService{
+		Clipboard: a.clip,
+		Notifier:  &runtimeNotifier{ctx: a.ctx},
+	}
+	return svc.SaveImage(a.ctx, pngBytes, dir)
+}
+
+func (a *App) consumePendingCapture() (*pendingCapture, error) {
+	a.pendingMu.Lock()
+	pc := a.pending
+	a.pending = nil
+	a.pendingMu.Unlock()
+
+	if pc == nil {
+		return nil, fmt.Errorf("no pending capture")
+	}
+	return pc, nil
+}
+
+func (a *App) captureSelectedPNG(result CaptureResult, pc *pendingCapture) ([]byte, error) {
+	rect := result.Rect
+	captureRect := image.Rect(rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
+	cropped, err := a.capturer.CaptureRegion(captureRect)
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Annotations) > 0 {
+		cropped, err = application.ApplyAnnotations(cropped, result.Annotations, pc.Display.Scale)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return cropped, nil
+}
+
+func (a *App) chooseSaveDirectory() (string, error) {
+	return wruntime.OpenDirectoryDialog(a.ctx, wruntime.OpenDialogOptions{
+		Title:                "Save screenshot to folder",
+		DefaultDirectory:     userPicturesDir(),
+		CanCreateDirectories: true,
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Bound methods (called from the frontend via Wails)
 // ---------------------------------------------------------------------------
@@ -366,35 +421,22 @@ func (a *App) CaptureNow() {
 // keep showing the screenshot (e.g. for a retry) — currently it just
 // dismisses regardless and surfaces the error via the upload:failure toast.
 func (a *App) ConfirmRegion(result CaptureResult) error {
-	a.pendingMu.Lock()
-	pc := a.pending
-	a.pending = nil
-	a.pendingMu.Unlock()
-
-	if pc == nil {
-		return fmt.Errorf("no pending capture")
+	pc, err := a.consumePendingCapture()
+	if err != nil {
+		return err
 	}
 	defer func() {
 		a.capturing.Store(false)
 		a.dismissOverlay()
 	}()
 
-	rect := result.Rect
-	captureRect := image.Rect(rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
 	a.dismissOverlay()
 	flushFrame()
 
-	cropped, err := a.capturer.CaptureRegion(captureRect)
+	cropped, err := a.captureSelectedPNG(result, pc)
 	if err != nil {
 		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
 		return err
-	}
-	if len(result.Annotations) > 0 {
-		cropped, err = application.ApplyAnnotations(cropped, result.Annotations, pc.Display.Scale)
-		if err != nil {
-			wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
-			return err
-		}
 	}
 	if err := a.runUploadPipeline(pc.Provider, cropped); err != nil {
 		return err
@@ -402,39 +444,164 @@ func (a *App) ConfirmRegion(result CaptureResult) error {
 	return nil
 }
 
+// CopyRegionImage is invoked by the fallback Wails overlay when the user
+// double-clicks the selected area.
+func (a *App) CopyRegionImage(result CaptureResult) error {
+	pc, err := a.consumePendingCapture()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		a.capturing.Store(false)
+		a.dismissOverlay()
+	}()
+
+	a.dismissOverlay()
+	flushFrame()
+
+	cropped, err := a.captureSelectedPNG(result, pc)
+	if err != nil {
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return err
+	}
+	return a.runCopyImagePipeline(cropped)
+}
+
+// SaveRegionImage lets the fallback Wails overlay pick a native destination
+// folder and writes the selected screenshot PNG there.
+func (a *App) SaveRegionImage(result CaptureResult) (CaptureActionResult, error) {
+	pc, err := a.consumePendingCapture()
+	if err != nil {
+		return CaptureActionResult{}, err
+	}
+
+	a.dismissOverlay()
+	flushFrame()
+
+	cropped, err := a.captureSelectedPNG(result, pc)
+	if err != nil {
+		a.capturing.Store(false)
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return CaptureActionResult{}, err
+	}
+
+	dir, err := a.chooseSaveDirectory()
+	if err != nil {
+		a.capturing.Store(false)
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return CaptureActionResult{}, err
+	}
+	if dir == "" {
+		a.capturing.Store(false)
+		a.dismissOverlay()
+		return CaptureActionResult{Completed: false}, nil
+	}
+
+	path, err := a.runSaveImagePipeline(cropped, dir)
+	a.capturing.Store(false)
+	a.dismissOverlay()
+	if err != nil {
+		return CaptureActionResult{}, err
+	}
+	return CaptureActionResult{Completed: true, Path: path}, nil
+}
+
 // ConfirmNativeRegion mirrors ConfirmRegion for the macOS native overlay.
 // The native AppKit panel has already been closed by the time this method is
 // called, so we must not dismiss/restore the Wails overlay window here.
 func (a *App) ConfirmNativeRegion(result CaptureResult) error {
-	a.pendingMu.Lock()
-	pc := a.pending
-	a.pending = nil
-	a.pendingMu.Unlock()
-
-	if pc == nil {
-		return fmt.Errorf("no pending capture")
+	pc, err := a.consumePendingCapture()
+	if err != nil {
+		return err
 	}
 	defer func() {
 		a.capturing.Store(false)
 		hideDockIcon()
 	}()
 
-	rect := result.Rect
-	captureRect := image.Rect(rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H)
 	flushFrame()
-	cropped, err := a.capturer.CaptureRegion(captureRect)
+	cropped, err := a.captureSelectedPNG(result, pc)
 	if err != nil {
 		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
 		return err
 	}
-	if len(result.Annotations) > 0 {
-		cropped, err = application.ApplyAnnotations(cropped, result.Annotations, pc.Display.Scale)
-		if err != nil {
-			wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
-			return err
-		}
-	}
 	return a.runUploadPipeline(pc.Provider, cropped)
+}
+
+func (a *App) CopyNativeRegionImage(result CaptureResult) error {
+	pc, err := a.consumePendingCapture()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		a.capturing.Store(false)
+		hideDockIcon()
+	}()
+
+	flushFrame()
+	cropped, err := a.captureSelectedPNG(result, pc)
+	if err != nil {
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return err
+	}
+	return a.runCopyImagePipeline(cropped)
+}
+
+func (a *App) SaveNativeRegionImage(result CaptureResult) (CaptureActionResult, error) {
+	pc, err := a.consumePendingCapture()
+	if err != nil {
+		return CaptureActionResult{}, err
+	}
+	defer func() {
+		a.capturing.Store(false)
+		hideDockIcon()
+	}()
+
+	flushFrame()
+	cropped, err := a.captureSelectedPNG(result, pc)
+	if err != nil {
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return CaptureActionResult{}, err
+	}
+	dir, err := a.chooseSaveDirectory()
+	if err != nil {
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return CaptureActionResult{}, err
+	}
+	if dir == "" {
+		return CaptureActionResult{Completed: false}, nil
+	}
+	path, err := a.runSaveImagePipeline(cropped, dir)
+	if err != nil {
+		return CaptureActionResult{}, err
+	}
+	return CaptureActionResult{Completed: true, Path: path}, nil
+}
+
+func (a *App) SaveNativeRegionImageToDir(result CaptureResult, dir string) (CaptureActionResult, error) {
+	pc, err := a.consumePendingCapture()
+	if err != nil {
+		return CaptureActionResult{}, err
+	}
+	defer func() {
+		a.capturing.Store(false)
+		hideDockIcon()
+	}()
+
+	if dir == "" {
+		return CaptureActionResult{Completed: false}, nil
+	}
+	flushFrame()
+	cropped, err := a.captureSelectedPNG(result, pc)
+	if err != nil {
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return CaptureActionResult{}, err
+	}
+	path, err := a.runSaveImagePipeline(cropped, dir)
+	if err != nil {
+		return CaptureActionResult{}, err
+	}
+	return CaptureActionResult{Completed: true, Path: path}, nil
 }
 
 func parseNativeAnnotations(raw string) []application.Annotation {

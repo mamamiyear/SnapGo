@@ -11,6 +11,8 @@ package main
 #import <AppKit/AppKit.h>
 
 extern void nativeOverlayConfirm(int x, int y, int w, int h, const char *annotationsJSON);
+extern void nativeOverlayCopy(int x, int y, int w, int h, const char *annotationsJSON);
+extern void nativeOverlaySave(int x, int y, int w, int h, const char *annotationsJSON, const char *dir);
 extern void nativeOverlayCancel(void);
 
 static NSWindow *nativeOverlayWindow = nil;
@@ -40,6 +42,7 @@ static id nativeOverlayKeyMonitor = nil;
 @property(strong) NSMutableArray<NSDictionary *> *annotations;
 @property(strong) NSMutableDictionary *draftAnnotation;
 @property(strong) NSButton *cancelButton;
+@property(strong) NSButton *saveButton;
 @property(strong) NSButton *uploadButton;
 @property(strong) NSButton *penButton;
 @property(strong) NSButton *rectButton;
@@ -52,6 +55,8 @@ static id nativeOverlayKeyMonitor = nil;
 - (void)syncControls;
 - (void)styleControls;
 - (void)confirmSelection;
+- (void)copySelection;
+- (void)saveSelection;
 - (void)cancelSelection;
 @end
 
@@ -70,6 +75,7 @@ static id nativeOverlayKeyMonitor = nil;
         _annotations = [NSMutableArray array];
 
         _cancelButton = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(cancelSelection)];
+        _saveButton = [NSButton buttonWithTitle:@"Save" target:self action:@selector(saveSelection)];
         _uploadButton = [NSButton buttonWithTitle:@"Upload & copy" target:self action:@selector(confirmSelection)];
         _penButton = [NSButton buttonWithTitle:@"" target:self action:@selector(selectPen)];
         _rectButton = [NSButton buttonWithTitle:@"" target:self action:@selector(selectRect)];
@@ -81,10 +87,10 @@ static id nativeOverlayKeyMonitor = nil;
         _hintLabel = [NSTextField labelWithString:@"Drag to select an area  ·  Esc to cancel"];
         [self styleControls];
 
-        for (NSView *view in @[_cancelButton, _uploadButton, _penButton, _rectButton, _ellipseButton, _colorButton, _undoButton, _paletteView, _sizeLabel, _hintLabel]) {
+        for (NSView *view in @[_cancelButton, _saveButton, _uploadButton, _penButton, _rectButton, _ellipseButton, _colorButton, _undoButton, _paletteView, _sizeLabel, _hintLabel]) {
             [self addSubview:view];
         }
-        for (NSView *view in @[_cancelButton, _uploadButton, _penButton, _rectButton, _ellipseButton, _colorButton, _undoButton, _paletteView]) {
+        for (NSView *view in @[_cancelButton, _saveButton, _uploadButton, _penButton, _rectButton, _ellipseButton, _colorButton, _undoButton, _paletteView]) {
             [view setHidden:YES];
         }
         [_sizeLabel setHidden:YES];
@@ -150,6 +156,9 @@ static id nativeOverlayKeyMonitor = nil;
     [self styleButton:_cancelButton
            background:[NSColor colorWithCalibratedWhite:0.12 alpha:0.96]
            foreground:[NSColor colorWithCalibratedWhite:0.86 alpha:1.0]];
+    [self styleButton:_saveButton
+           background:[NSColor colorWithCalibratedWhite:0.18 alpha:0.96]
+           foreground:[NSColor whiteColor]];
     [self styleButton:_uploadButton
            background:[NSColor colorWithCalibratedRed:59.0/255.0 green:130.0/255.0 blue:246.0/255.0 alpha:1.0]
            foreground:[NSColor whiteColor]];
@@ -310,6 +319,10 @@ static id nativeOverlayKeyMonitor = nil;
 
 - (void)mouseDown:(NSEvent *)event {
     NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+    if ([event clickCount] == 2 && _hasSelection && NSPointInRect(p, _selection)) {
+        [self copySelection];
+        return;
+    }
     NSString *handle = [self resizeHandleAtPoint:p];
     if (handle != nil) {
         _resizing = YES;
@@ -426,6 +439,7 @@ static id nativeOverlayKeyMonitor = nil;
 - (void)syncControls {
     BOOL visible = _hasSelection && _selection.size.width >= 4 && _selection.size.height >= 4;
     [_cancelButton setHidden:!visible];
+    [_saveButton setHidden:!visible];
     [_uploadButton setHidden:!visible];
     [_penButton setHidden:!visible];
     [_rectButton setHidden:!visible];
@@ -442,7 +456,7 @@ static id nativeOverlayKeyMonitor = nil;
     [_sizeLabel setStringValue:[NSString stringWithFormat:@"%.0f × %.0f", _selection.size.width, _selection.size.height]];
     [_sizeLabel setFrame:NSMakeRect(_selection.origin.x, MAX(0, _selection.origin.y - 26), 110, 22)];
 
-    CGFloat toolbarW = 220;
+    CGFloat toolbarW = 292;
     CGFloat toolbarH = 40;
     CGFloat x = _selection.origin.x + _selection.size.width - toolbarW;
     CGFloat y = _selection.origin.y + _selection.size.height + 8;
@@ -451,8 +465,9 @@ static id nativeOverlayKeyMonitor = nil;
     }
     x = MAX(0, MIN(x, self.bounds.size.width - toolbarW));
 
-    [_cancelButton setFrame:NSMakeRect(x, y, 86, 32)];
-    [_uploadButton setFrame:NSMakeRect(x + 92, y, 128, 32)];
+    [_cancelButton setFrame:NSMakeRect(x, y, 74, 32)];
+    [_saveButton setFrame:NSMakeRect(x + 80, y, 64, 32)];
+    [_uploadButton setFrame:NSMakeRect(x + 150, y, 142, 32)];
 
     CGFloat markW = 170;
     CGFloat markX = MAX(0, MIN(_selection.origin.x, self.bounds.size.width - markW));
@@ -547,28 +562,61 @@ static id nativeOverlayKeyMonitor = nil;
     return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
 }
 
-- (void)confirmSelection {
-    if (!_hasSelection) {
-        return;
-    }
-    NSRect r = _selection;
-    [nativeOverlayWindow orderOut:nil];
-        if (nativeOverlayKeyMonitor != nil) {
-            [NSEvent removeMonitor:nativeOverlayKeyMonitor];
-            nativeOverlayKeyMonitor = nil;
-        }
-    nativeOverlayWindow = nil;
-    NSString *json = [self annotationsJSON];
-    nativeOverlayConfirm((int)llround(r.origin.x), (int)llround(r.origin.y), (int)llround(r.size.width), (int)llround(r.size.height), [json UTF8String]);
-}
-
-- (void)cancelSelection {
+- (void)closeOverlayWindow {
     [nativeOverlayWindow orderOut:nil];
     if (nativeOverlayKeyMonitor != nil) {
         [NSEvent removeMonitor:nativeOverlayKeyMonitor];
         nativeOverlayKeyMonitor = nil;
     }
     nativeOverlayWindow = nil;
+}
+
+- (void)confirmSelection {
+    if (!_hasSelection) {
+        return;
+    }
+    NSRect r = _selection;
+    [self closeOverlayWindow];
+    NSString *json = [self annotationsJSON];
+    nativeOverlayConfirm((int)llround(r.origin.x), (int)llround(r.origin.y), (int)llround(r.size.width), (int)llround(r.size.height), [json UTF8String]);
+}
+
+- (void)copySelection {
+    if (!_hasSelection) {
+        return;
+    }
+    NSRect r = _selection;
+    [self closeOverlayWindow];
+    NSString *json = [self annotationsJSON];
+    nativeOverlayCopy((int)llround(r.origin.x), (int)llround(r.origin.y), (int)llround(r.size.width), (int)llround(r.size.height), [json UTF8String]);
+}
+
+- (void)saveSelection {
+    if (!_hasSelection) {
+        return;
+    }
+    NSRect r = _selection;
+    NSString *json = [self annotationsJSON];
+    [self closeOverlayWindow];
+
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    [panel setTitle:@"Save screenshot to folder"];
+    [panel setCanChooseFiles:NO];
+    [panel setCanChooseDirectories:YES];
+    [panel setAllowsMultipleSelection:NO];
+    [panel setCanCreateDirectories:YES];
+    [panel beginWithCompletionHandler:^(NSModalResponse result) {
+        if (result != NSModalResponseOK || [panel URL] == nil) {
+            nativeOverlayCancel();
+            return;
+        }
+        NSString *dir = [[panel URL] path];
+        nativeOverlaySave((int)llround(r.origin.x), (int)llround(r.origin.y), (int)llround(r.size.width), (int)llround(r.size.height), [json UTF8String], [dir UTF8String]);
+    }];
+}
+
+- (void)cancelSelection {
+    [self closeOverlayWindow];
     nativeOverlayCancel();
 }
 @end

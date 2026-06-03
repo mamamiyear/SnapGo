@@ -30,6 +30,14 @@ const emit = defineEmits<{
     e: 'confirm',
     payload: { rect: Rect; annotations: Annotation[] }
   ): void
+  (
+    e: 'copy',
+    payload: { rect: Rect; annotations: Annotation[] }
+  ): void
+  (
+    e: 'save',
+    payload: { rect: Rect; annotations: Annotation[] }
+  ): void
   (e: 'cancel'): void
 }>()
 
@@ -92,7 +100,7 @@ const sizeLabel = computed(() => {
 
 const rightToolbarPos = computed(() => {
   if (!rect.value) return null
-  return placeToolbar(rect.value, 220, 40, 'right')
+  return placeToolbar(rect.value, 304, 40, 'right')
 })
 
 const leftToolbarPos = computed(() => {
@@ -218,6 +226,11 @@ function onSelectionMouseDown(e: MouseEvent) {
   if (e.button !== 0 || !rect.value) return
   e.stopPropagation()
   paletteOpen.value = false
+  if (e.detail >= 2) {
+    removeSinglePointAnnotation()
+    onCopy()
+    return
+  }
   const p = pointFromEvent(e)
   const handle = hitHandle(p)
   if (handle) {
@@ -312,11 +325,26 @@ function chooseColor(color: string) {
 }
 
 function onConfirm() {
+  emitAction('confirm')
+}
+
+function onCopy() {
+  emitAction('copy')
+}
+
+function onSave() {
+  emitAction('save')
+}
+
+function emitAction(action: 'confirm' | 'copy' | 'save') {
   if (!rect.value) return
-  emit('confirm', {
+  const payload = {
     rect: { ...rect.value },
     annotations: annotations.value,
-  })
+  }
+  if (action === 'confirm') emit('confirm', payload)
+  if (action === 'copy') emit('copy', payload)
+  if (action === 'save') emit('save', payload)
 }
 
 function onCancel() {
@@ -335,6 +363,13 @@ function onKeydown(e: KeyboardEvent) {
 
 function undoAnnotation() {
   annotations.value.pop()
+}
+
+function removeSinglePointAnnotation() {
+  const last = annotations.value[annotations.value.length - 1]
+  if (last && last.tool === activeTool.value && last.points.length <= 1) {
+    annotations.value.pop()
+  }
 }
 
 onMounted(() => {
@@ -522,6 +557,9 @@ onUnmounted(() => {
       @mousedown.stop
     >
       <button class="btn cancel" @click="onCancel" title="Esc">Cancel</button>
+      <button class="btn secondary" @click="onSave" title="Save to folder">
+        Save
+      </button>
       <button class="btn primary" @click="onConfirm" title="Enter">
         Upload &amp; copy
       </button>
@@ -612,7 +650,7 @@ onUnmounted(() => {
   width: 190px;
 }
 .action-toolbar {
-  width: 220px;
+  width: 304px;
 }
 
 .btn,
@@ -635,6 +673,13 @@ onUnmounted(() => {
 }
 .btn.cancel:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+.btn.secondary {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+.btn.secondary:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 .btn.primary {
   background: #3b82f6;

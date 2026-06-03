@@ -22,6 +22,14 @@ export function ConfirmRegion(arg1) {
   return window['go']['main']['App']['ConfirmRegion'](arg1);
 }
 
+export function CopyNativeRegionImage(arg1) {
+  return window['go']['main']['App']['CopyNativeRegionImage'](arg1);
+}
+
+export function CopyRegionImage(arg1) {
+  return window['go']['main']['App']['CopyRegionImage'](arg1);
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
@@ -36,6 +44,18 @@ export function RetryRegisterHotkey() {
 
 export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
+}
+
+export function SaveNativeRegionImage(arg1) {
+  return window['go']['main']['App']['SaveNativeRegionImage'](arg1);
+}
+
+export function SaveNativeRegionImageToDir(arg1, arg2) {
+  return window['go']['main']['App']['SaveNativeRegionImageToDir'](arg1, arg2);
+}
+
+export function SaveRegionImage(arg1) {
+  return window['go']['main']['App']['SaveRegionImage'](arg1);
 }
 
 export function ShowWindow() {

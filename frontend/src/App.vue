@@ -21,6 +21,8 @@ import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime'
 import {
   RetryRegisterHotkey,
   ConfirmRegion,
+  CopyRegionImage,
+  SaveRegionImage,
   CancelRegion,
 } from '../wailsjs/go/main/App'
 
@@ -85,6 +87,50 @@ async function onOverlayConfirm(rect: {
   }
 }
 
+async function onOverlayCopy(rect: {
+  rect: {
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+  annotations: Array<{
+    tool: string
+    color: string
+    points: Array<{ x: number; y: number }>
+  }>
+}) {
+  mode.value = 'settings'
+  overlayPayload.value = null
+  try {
+    await CopyRegionImage(rect as any)
+  } catch {
+    /* Surfaced via upload:failure */
+  }
+}
+
+async function onOverlaySave(rect: {
+  rect: {
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+  annotations: Array<{
+    tool: string
+    color: string
+    points: Array<{ x: number; y: number }>
+  }>
+}) {
+  mode.value = 'settings'
+  overlayPayload.value = null
+  try {
+    await SaveRegionImage(rect as any)
+  } catch {
+    /* Surfaced via upload:failure */
+  }
+}
+
 async function onOverlayCancel() {
   mode.value = 'settings'
   overlayPayload.value = null
@@ -143,6 +189,8 @@ onUnmounted(() => {
     :width="overlayPayload.cssWidth"
     :height="overlayPayload.cssHeight"
     @confirm="onOverlayConfirm"
+    @copy="onOverlayCopy"
+    @save="onOverlaySave"
     @cancel="onOverlayCancel"
   />
 

@@ -13,6 +13,10 @@ export function ConfirmNativeRegion(arg1:main.CaptureResult):Promise<void>;
 
 export function ConfirmRegion(arg1:main.CaptureResult):Promise<void>;
 
+export function CopyNativeRegionImage(arg1:main.CaptureResult):Promise<void>;
+
+export function CopyRegionImage(arg1:main.CaptureResult):Promise<void>;
+
 export function GetConfig():Promise<domain.AppConfig>;
 
 export function QuitApp():Promise<void>;
@@ -20,6 +24,12 @@ export function QuitApp():Promise<void>;
 export function RetryRegisterHotkey():Promise<void>;
 
 export function SaveConfig(arg1:domain.AppConfig):Promise<void>;
+
+export function SaveNativeRegionImage(arg1:main.CaptureResult):Promise<main.CaptureActionResult>;
+
+export function SaveNativeRegionImageToDir(arg1:main.CaptureResult,arg2:string):Promise<main.CaptureActionResult>;
+
+export function SaveRegionImage(arg1:main.CaptureResult):Promise<main.CaptureActionResult>;
 
 export function ShowWindow():Promise<void>;
 
