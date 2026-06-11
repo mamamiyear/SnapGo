@@ -1,5 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+// Inline SVG markup imported as raw strings via Vite's `?raw` suffix.
+// Rationale: rendering through v-html lets the icon inherit `currentColor`
+// from the toolbar button, so styling stays in CSS without bundling extra
+// SVG-as-component plugins.
+import cancelIcon from '../assets/icons/cancel.svg?raw'
+import copyIcon from '../assets/icons/copy.svg?raw'
+import saveIcon from '../assets/icons/save-local.svg?raw'
+import uploadIcon from '../assets/icons/upload.svg?raw'
 
 interface Props {
   width: number
@@ -100,7 +108,7 @@ const sizeLabel = computed(() => {
 
 const rightToolbarPos = computed(() => {
   if (!rect.value) return null
-  return placeToolbar(rect.value, 304, 40, 'right')
+  return placeToolbar(rect.value, 144, 40, 'right')
 })
 
 const leftToolbarPos = computed(() => {
@@ -556,13 +564,34 @@ onUnmounted(() => {
       :style="{ left: rightToolbarPos.x + 'px', top: rightToolbarPos.y + 'px' }"
       @mousedown.stop
     >
-      <button class="btn cancel" @click="onCancel" title="Esc">Cancel</button>
-      <button class="btn secondary" @click="onSave" title="Save to folder">
-        Save
-      </button>
-      <button class="btn primary" @click="onConfirm" title="Enter">
-        Upload &amp; copy
-      </button>
+      <button
+        class="action-btn cancel"
+        data-tip="取消截图"
+        aria-label="取消截图"
+        @click="onCancel"
+        v-html="cancelIcon"
+      />
+      <button
+        class="action-btn"
+        data-tip="复制图标"
+        aria-label="复制图标"
+        @click="onCopy"
+        v-html="copyIcon"
+      />
+      <button
+        class="action-btn"
+        data-tip="保存本地"
+        aria-label="保存本地"
+        @click="onSave"
+        v-html="saveIcon"
+      />
+      <button
+        class="action-btn primary"
+        data-tip="上传云端"
+        aria-label="上传云端"
+        @click="onConfirm"
+        v-html="uploadIcon"
+      />
     </div>
 
     <div v-if="!rect" class="hint">
@@ -650,43 +679,81 @@ onUnmounted(() => {
   width: 190px;
 }
 .action-toolbar {
-  width: 304px;
+  width: 144px;
 }
 
-.btn,
 .icon-btn,
+.action-btn,
 .swatch {
   font-family: inherit;
 }
 
-.btn {
+/*
+ * .action-btn — Square SVG icon button used in the bottom-right action toolbar.
+ *
+ * Design rationale:
+ * - Mirrors .icon-btn sizing (32px square) so the action toolbar is visually
+ *   balanced with the annotation toolbar.
+ * - Uses `currentColor` so each instance can override its own hue (e.g. the
+ *   primary upload button is blue) while sharing one base set of rules.
+ * - The native CSS tooltip is rendered through `::after` driven by the
+ *   `data-tip` attribute. This avoids the system `title` tooltip's slow show
+ *   delay and lets us style/position the bubble consistently.
+ */
+.action-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
   border: 0;
   border-radius: 5px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.btn.cancel {
-  background: transparent;
   color: #d1d5db;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
 }
-.btn.cancel:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-.btn.secondary {
+.action-btn:hover {
+  color: #fff;
   background: rgba(255, 255, 255, 0.12);
+}
+.action-btn.cancel:hover {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.18);
+}
+.action-btn.primary {
+  color: #60a5fa;
+}
+.action-btn.primary:hover {
   color: #fff;
-}
-.btn.secondary:hover {
-  background: rgba(255, 255, 255, 0.18);
-}
-.btn.primary {
-  background: #3b82f6;
-  color: #fff;
-}
-.btn.primary:hover {
   background: #2563eb;
+}
+.action-btn :deep(svg) {
+  width: 18px;
+  height: 18px;
+  display: block;
+  fill: currentColor;
+  pointer-events: none;
+}
+.action-btn::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.92);
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease 0.05s;
+  z-index: 5;
+}
+.action-btn:hover::after {
+  opacity: 1;
 }
 
 .icon-btn {

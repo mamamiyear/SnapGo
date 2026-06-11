@@ -4,11 +4,12 @@ package main
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc -fblocks
-#cgo LDFLAGS: -framework AppKit -framework CoreGraphics
+#cgo LDFLAGS: -framework AppKit -framework CoreGraphics -framework QuartzCore
 #include <math.h>
 #include <dispatch/dispatch.h>
 #import <objc/runtime.h>
 #import <AppKit/AppKit.h>
+#import <QuartzCore/QuartzCore.h>
 
 extern void nativeOverlayConfirm(int x, int y, int w, int h, const char *annotationsJSON);
 extern void nativeOverlayCopy(int x, int y, int w, int h, const char *annotationsJSON);
@@ -24,6 +25,58 @@ static id nativeOverlayKeyMonitor = nil;
 @implementation SnipNativeOverlayPanel
 - (BOOL)canBecomeKeyWindow { return YES; }
 - (BOOL)canBecomeMainWindow { return YES; }
+@end
+
+// SnipHoverButton — NSButton subclass that animates its tint color on hover.
+//
+// Design rationale:
+// - NSButton has no built-in hover state; we install an NSTrackingArea that
+//   tracks mouseEntered/mouseExited regardless of focus state.
+// - When the cursor enters, the content tint color animates from `baseColor`
+//   to `hoverColor` over 0.2s using NSAnimationContext, matching the spec.
+//   When the cursor leaves, the color reverts immediately (no animation).
+// - `baseColor`/`hoverColor` are configurable per-instance so each action
+//   button can keep a shared white default but expose its own hover hue
+//   (cancel = red, others = blue).
+@interface SnipHoverButton : NSButton
+@property(strong) NSColor *baseColor;
+@property(strong) NSColor *hoverColor;
+@property(strong) NSTrackingArea *hoverTrackingArea;
+@end
+
+@implementation SnipHoverButton
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    if (_hoverTrackingArea) {
+        [self removeTrackingArea:_hoverTrackingArea];
+    }
+    NSTrackingAreaOptions opts = NSTrackingMouseEnteredAndExited |
+                                 NSTrackingActiveAlways |
+                                 NSTrackingInVisibleRect;
+    _hoverTrackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                      options:opts
+                                                        owner:self
+                                                     userInfo:nil];
+    [self addTrackingArea:_hoverTrackingArea];
+}
+- (void)mouseEntered:(NSEvent *)event {
+    if (@available(macOS 10.14, *)) {
+        NSColor *target = _hoverColor ?: [NSColor whiteColor];
+        // Animate the tint color transition over 0.2s for a soft fade-in.
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+            [ctx setDuration:0.2];
+            [ctx setTimingFunction:[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
+            [[self animator] setContentTintColor:target];
+        } completionHandler:nil];
+    }
+}
+- (void)mouseExited:(NSEvent *)event {
+    if (@available(macOS 10.14, *)) {
+        NSColor *base = _baseColor ?: [NSColor whiteColor];
+        // Snap back to the base color instantly (no animation) per spec.
+        [self setContentTintColor:base];
+    }
+}
 @end
 
 @interface SnipNativeOverlayView : NSView
@@ -42,7 +95,14 @@ static id nativeOverlayKeyMonitor = nil;
 @property(strong) NSMutableArray<NSDictionary *> *annotations;
 @property(strong) NSMutableDictionary *draftAnnotation;
 @property(strong) NSButton *cancelButton;
+// Use `clipboardButton` (not `copyButton`) to avoid ARC's "copy" method
+// family ownership rule which would otherwise treat the synthesized getter
+// as returning a +1 retained object.
+@property(strong) NSButton *clipboardButton;
 @property(strong) NSButton *saveButton;
+// `saveRemoteButton` triggers a placeholder action ("not yet supported")
+// per product spec; the icon comes from save-remote.svg.
+@property(strong) NSButton *saveRemoteButton;
 @property(strong) NSButton *uploadButton;
 @property(strong) NSButton *penButton;
 @property(strong) NSButton *rectButton;
@@ -50,6 +110,7 @@ static id nativeOverlayKeyMonitor = nil;
 @property(strong) NSButton *colorButton;
 @property(strong) NSButton *undoButton;
 @property(strong) NSView *paletteView;
+@property(strong) NSView *actionToolbarBg;
 @property(strong) NSTextField *sizeLabel;
 @property(strong) NSTextField *hintLabel;
 - (void)syncControls;
@@ -57,6 +118,7 @@ static id nativeOverlayKeyMonitor = nil;
 - (void)confirmSelection;
 - (void)copySelection;
 - (void)saveSelection;
+- (void)saveRemoteSelection;
 - (void)cancelSelection;
 @end
 
@@ -74,23 +136,44 @@ static id nativeOverlayKeyMonitor = nil;
         _activeColor = [NSColor colorWithCalibratedRed:239.0/255.0 green:68.0/255.0 blue:68.0/255.0 alpha:1.0];
         _annotations = [NSMutableArray array];
 
-        _cancelButton = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(cancelSelection)];
-        _saveButton = [NSButton buttonWithTitle:@"Save" target:self action:@selector(saveSelection)];
-        _uploadButton = [NSButton buttonWithTitle:@"Upload & copy" target:self action:@selector(confirmSelection)];
+        // Use SnipHoverButton for the 5 action buttons so we get hover-color
+        // animation. Annotation buttons stay as plain NSButton because they
+        // already have explicit on/off "active" styling.
+        _cancelButton = [SnipHoverButton buttonWithTitle:@"" target:self action:@selector(cancelSelection)];
+        _clipboardButton = [SnipHoverButton buttonWithTitle:@"" target:self action:@selector(copySelection)];
+        _saveButton = [SnipHoverButton buttonWithTitle:@"" target:self action:@selector(saveSelection)];
+        _saveRemoteButton = [SnipHoverButton buttonWithTitle:@"" target:self action:@selector(saveRemoteSelection)];
+        _uploadButton = [SnipHoverButton buttonWithTitle:@"" target:self action:@selector(confirmSelection)];
+        // Tooltip strings shown on hover for each action button.
+        // Localized in Chinese to match the rest of the action UI surface.
+        [_cancelButton setToolTip:@"取消截图"];
+        [_clipboardButton setToolTip:@"复制图片"];
+        [_saveButton setToolTip:@"保存本地"];
+        [_saveRemoteButton setToolTip:@"保存远端"];
+        [_uploadButton setToolTip:@"上传云端"];
         _penButton = [NSButton buttonWithTitle:@"" target:self action:@selector(selectPen)];
         _rectButton = [NSButton buttonWithTitle:@"" target:self action:@selector(selectRect)];
         _ellipseButton = [NSButton buttonWithTitle:@"" target:self action:@selector(selectEllipse)];
         _colorButton = [NSButton buttonWithTitle:@"" target:self action:@selector(togglePalette)];
         _undoButton = [NSButton buttonWithTitle:@"" target:self action:@selector(undoAnnotation)];
         _paletteView = [[NSView alloc] initWithFrame:NSZeroRect];
+        // Dark rounded background container behind the action icon buttons,
+        // mirroring the look of `.action-toolbar` in the Vue overlay.
+        _actionToolbarBg = [[NSView alloc] initWithFrame:NSZeroRect];
+        [_actionToolbarBg setWantsLayer:YES];
+        [[_actionToolbarBg layer] setCornerRadius:8];
+        [[_actionToolbarBg layer] setBackgroundColor:[[NSColor colorWithCalibratedWhite:0.11 alpha:0.94] CGColor]];
         _sizeLabel = [NSTextField labelWithString:@""];
         _hintLabel = [NSTextField labelWithString:@"Drag to select an area  ·  Esc to cancel"];
         [self styleControls];
 
-        for (NSView *view in @[_cancelButton, _saveButton, _uploadButton, _penButton, _rectButton, _ellipseButton, _colorButton, _undoButton, _paletteView, _sizeLabel, _hintLabel]) {
+        // Add the action toolbar background BEFORE the buttons so it sits
+        // behind them in the view hierarchy (AppKit z-order = subview order).
+        [self addSubview:_actionToolbarBg];
+        for (NSView *view in @[_cancelButton, _clipboardButton, _saveButton, _saveRemoteButton, _uploadButton, _penButton, _rectButton, _ellipseButton, _colorButton, _undoButton, _paletteView, _sizeLabel, _hintLabel]) {
             [self addSubview:view];
         }
-        for (NSView *view in @[_cancelButton, _saveButton, _uploadButton, _penButton, _rectButton, _ellipseButton, _colorButton, _undoButton, _paletteView]) {
+        for (NSView *view in @[_cancelButton, _clipboardButton, _saveButton, _saveRemoteButton, _uploadButton, _penButton, _rectButton, _ellipseButton, _colorButton, _undoButton, _paletteView, _actionToolbarBg]) {
             [view setHidden:YES];
         }
         [_sizeLabel setHidden:YES];
@@ -153,15 +236,43 @@ static id nativeOverlayKeyMonitor = nil;
 }
 
 - (void)styleControls {
-    [self styleButton:_cancelButton
-           background:[NSColor colorWithCalibratedWhite:0.12 alpha:0.96]
-           foreground:[NSColor colorWithCalibratedWhite:0.86 alpha:1.0]];
-    [self styleButton:_saveButton
-           background:[NSColor colorWithCalibratedWhite:0.18 alpha:0.96]
-           foreground:[NSColor whiteColor]];
-    [self styleButton:_uploadButton
-           background:[NSColor colorWithCalibratedRed:59.0/255.0 green:130.0/255.0 blue:246.0/255.0 alpha:1.0]
-           foreground:[NSColor whiteColor]];
+    // Cancel / Copy / Save / Save-remote / Upload — square icon buttons
+    // rendered from the user-supplied SVG assets. All five default to white
+    // and animate to a per-action accent color on hover (cancel = red,
+    // others = blue). The base "white default" replaces the previous blue
+    // upload tint so the toolbar reads as a uniform icon row.
+    NSImage *cancelIcon = [self iconFromSVG:@"<svg viewBox='0 0 1024 1024' xmlns='http://www.w3.org/2000/svg'><path d='M512 85.333333c235.648 0 426.666667 191.018667 426.666667 426.666667s-191.018667 426.666667-426.666667 426.666667S85.333333 747.648 85.333333 512 276.352 85.333333 512 85.333333zM170.666667 512a341.333333 341.333333 0 0 0 550.613333 269.653333L242.304 302.762667A339.84 339.84 0 0 0 170.666667 512z m341.333333-341.333333c-78.848 0-151.466667 26.752-209.28 71.68l478.976 478.933333A341.333333 341.333333 0 0 0 512 170.666667z' fill='white'/></svg>"];
+    NSImage *copyIcon = [self iconFromSVG:@"<svg viewBox='0 0 1024 1024' xmlns='http://www.w3.org/2000/svg'><path d='M768 256a85.333333 85.333333 0 0 1 85.333333 85.333333v512a85.333333 85.333333 0 0 1-85.333333 85.333334h-341.333333a85.333333 85.333333 0 0 1-85.333334-85.333334V341.333333a85.333333 85.333333 0 0 1 85.333334-85.333333h341.333333z m0 85.333333h-341.333333v512h341.333333V341.333333z m-128-256a42.666667 42.666667 0 0 1 42.666667 42.666667l-0.042667 42.666667H256l-0.042667 597.333333H213.333333a42.666667 42.666667 0 0 1-42.666666-42.666667V170.666667a85.333333 85.333333 0 0 1 85.333333-85.333334h384z' fill='white'/></svg>"];
+    NSImage *saveIcon = [self iconFromSVG:@"<svg viewBox='0 0 1024 1024' xmlns='http://www.w3.org/2000/svg'><path d='M896 810.666667a85.333333 85.333333 0 0 1-85.333333 85.333333H213.333333a85.333333 85.333333 0 0 1-85.333333-85.333333V213.333333a85.333333 85.333333 0 0 1 85.333333-85.333333h250.368a85.333333 85.333333 0 0 1 73.173334 41.429333L563.2 213.333333H810.666667a85.333333 85.333333 0 0 1 85.333333 85.333334v512z m-85.333333-341.333334H213.333333v341.333334h597.333334v-341.333334z m-346.965334-256H213.333333v170.666667h597.333334V298.666667h-271.616a42.666667 42.666667 0 0 1-36.608-20.736L463.701333 213.333333z' fill='white'/></svg>"];
+    // save-remote.svg — provided by the user; its content is the same arrow
+    // icon as the previous upload, so we reuse it verbatim here.
+    NSImage *saveRemoteIcon = [self iconFromSVG:@"<svg viewBox='0 0 1024 1024' xmlns='http://www.w3.org/2000/svg'><path d='M481.749333 353.792c16.682667-16.64 43.690667-16.64 60.373334 0l120.917333 120.832 3.541333 4.010667a42.666667 42.666667 0 0 1-63.872 56.32L554.666667 486.954667V896a42.666667 42.666667 0 0 1-85.333334 0v-409.173333l-48.170666 48.128a42.666667 42.666667 0 0 1-60.330667 0l-3.541333-4.010667a42.666667 42.666667 0 0 1 3.541333-56.32zM512 85.333333c122.538667 0 227.84 73.813333 273.92 179.370667A213.333333 213.333333 0 0 1 725.333333 682.666667a42.666667 42.666667 0 0 1-4.992-85.034667L725.333333 597.333333a128 128 0 0 0 36.394667-250.794666l-38.144-11.264-15.914667-36.437334a213.376 213.376 0 0 0-407.296 58.026667l-7.381333 58.368-57.173333 13.824A85.418667 85.418667 0 0 0 256 597.333333h42.666667a42.666667 42.666667 0 0 1 0 85.333334H256a170.666667 170.666667 0 0 1-40.277333-336.554667A298.709333 298.709333 0 0 1 512 85.333333z' fill='white'/></svg>"];
+    // upload.svg — newly replaced "send/cloud" icon supplied by the user.
+    NSImage *uploadIcon = [self iconFromSVG:@"<svg viewBox='0 0 1024 1024' xmlns='http://www.w3.org/2000/svg'><path d='M550.528 544.128L640 539.776V678.4l178.005333-178.005333L640 322.389333v129.024l-72.618667 10.922667c-155.52 23.424-251.733333 73.557333-312.874666 164.437333 84.906667-50.602667 178.261333-76.928 296.021333-82.645333zM554.666667 629.376c-27.392 1.322667-53.034667 3.968-77.141334 7.808l-8.192 1.365333c-136.704 23.637333-224.810667 87.168-310.954666 176.128-26.154667 27.008-51.882667 59.648-51.882667 59.648-14.848 18.176-24.021333 14.037333-20.352-9.173333 0 0 4.394667-31.402667 11.690667-65.792C144.938667 577.066667 250.581333 423.68 554.666667 377.941333V209.066667a38.4 38.4 0 0 1 65.536-27.136l291.328 291.285333a38.4 38.4 0 0 1 0 54.314667l-291.328 291.285333A38.4 38.4 0 0 1 554.666667 791.637333v-162.261333z' fill='white'/></svg>"];
+
+    [self styleIconButton:_cancelButton image:cancelIcon];
+    [self styleIconButton:_clipboardButton image:copyIcon];
+    [self styleIconButton:_saveButton image:saveIcon];
+    [self styleIconButton:_saveRemoteButton image:saveRemoteIcon];
+    [self styleIconButton:_uploadButton image:uploadIcon];
+
+    // Configure hover colors for the 5 action buttons. White is the shared
+    // base; cancel turns red on hover and the rest turn blue, providing a
+    // glance-able cue for destructive vs. constructive actions.
+    NSColor *baseWhite = [NSColor whiteColor];
+    NSColor *hoverRed  = [NSColor colorWithCalibratedRed:248.0/255.0 green:113.0/255.0 blue:113.0/255.0 alpha:1.0];
+    NSColor *hoverBlue = [NSColor colorWithCalibratedRed:96.0/255.0  green:165.0/255.0 blue:250.0/255.0 alpha:1.0];
+    SnipHoverButton *cancelHB     = (SnipHoverButton *)_cancelButton;
+    SnipHoverButton *clipboardHB  = (SnipHoverButton *)_clipboardButton;
+    SnipHoverButton *saveHB       = (SnipHoverButton *)_saveButton;
+    SnipHoverButton *saveRemoteHB = (SnipHoverButton *)_saveRemoteButton;
+    SnipHoverButton *uploadHB     = (SnipHoverButton *)_uploadButton;
+    cancelHB.baseColor = baseWhite;     cancelHB.hoverColor = hoverRed;
+    clipboardHB.baseColor = baseWhite;  clipboardHB.hoverColor = hoverBlue;
+    saveHB.baseColor = baseWhite;       saveHB.hoverColor = hoverBlue;
+    saveRemoteHB.baseColor = baseWhite; saveRemoteHB.hoverColor = hoverBlue;
+    uploadHB.baseColor = baseWhite;     uploadHB.hoverColor = hoverBlue;
+
     [self styleIconButton:_penButton image:[self iconFromSVG:@"<svg viewBox='0 0 1024 1024' xmlns='http://www.w3.org/2000/svg'><path d='M742.72 752.064c-29.696 28.576-42.976 48.96-42.976 77.12 0 98.4 143.776 142.464 229.728 65.536l-21.344-23.84c-66.976 59.936-176.384 26.4-176.384-41.696 0-16.832 9.28-31.104 33.184-54.08l13.44-12.736c61.024-58.016 75.328-102.72 29.312-179.84-43.84-73.44-96.8-88.288-162.784-50.56-47.232 27.04-68.64 47.456-208.32 190.4-70.624 72.288-153.92 77.088-217.344 26.784-59.712-47.328-79.872-127.36-42.176-188.64 24.512-39.84 62.656-72.896 136.64-124.48 5.952-4.192 27.04-18.816 31.104-21.664 12.16-8.448 21.536-15.104 30.4-21.536 107.552-78.272 140.8-139.136 86.048-219.904-76.992-113.472-202.304-90.016-367.744 61.472l21.6 23.616c153.088-140.224 256.896-159.616 319.68-67.104 41.632 61.408 16.896 106.688-78.4 176.032-8.64 6.304-17.92 12.832-29.888 21.184l-31.136 21.632c-77.504 54.08-117.984 89.184-145.536 133.984-46.784 76.032-22.176 173.664 49.536 230.496 76.224 60.416 177.952 54.56 260.096-29.504 136.16-139.36 158.08-160.224 201.312-184.96 50.656-28.96 84.416-19.52 119.424 39.168 36.896 61.824 27.52 91.392-23.808 140.16 0.096-0.064-10.976 10.368-13.632 12.96z' fill='white'/></svg>"]];
     [self styleIconButton:_rectButton image:[self iconFromSVG:@"<svg viewBox='0 0 1024 1024' xmlns='http://www.w3.org/2000/svg'><path d='M96 96h832v832H96V96z m32 32v768h768V128H128z' fill='white'/></svg>"]];
     [self styleIconButton:_ellipseButton image:[self iconFromSVG:@"<svg viewBox='0 0 1024 1024' xmlns='http://www.w3.org/2000/svg'><path d='M512 928c229.76 0 416-186.24 416-416S741.76 96 512 96 96 282.24 96 512s186.24 416 416 416z m0-32C299.936 896 128 724.064 128 512S299.936 128 512 128s384 171.936 384 384-171.936 384-384 384z' fill='white'/></svg>"]];
@@ -439,8 +550,11 @@ static id nativeOverlayKeyMonitor = nil;
 - (void)syncControls {
     BOOL visible = _hasSelection && _selection.size.width >= 4 && _selection.size.height >= 4;
     [_cancelButton setHidden:!visible];
+    [_clipboardButton setHidden:!visible];
     [_saveButton setHidden:!visible];
+    [_saveRemoteButton setHidden:!visible];
     [_uploadButton setHidden:!visible];
+    [_actionToolbarBg setHidden:!visible];
     [_penButton setHidden:!visible];
     [_rectButton setHidden:!visible];
     [_ellipseButton setHidden:!visible];
@@ -456,7 +570,13 @@ static id nativeOverlayKeyMonitor = nil;
     [_sizeLabel setStringValue:[NSString stringWithFormat:@"%.0f × %.0f", _selection.size.width, _selection.size.height]];
     [_sizeLabel setFrame:NSMakeRect(_selection.origin.x, MAX(0, _selection.origin.y - 26), 110, 22)];
 
-    CGFloat toolbarW = 292;
+    // Action toolbar layout — 5 icon buttons, each 28x28, separated by 8px,
+    // with 4px outer padding. Total = 5*28 + 4*8 + 2*4 = 180px wide.
+    CGFloat actionBtnSize = 28;
+    CGFloat actionGap = 8;
+    CGFloat actionPad = 4;
+    NSInteger actionCount = 5;
+    CGFloat toolbarW = actionPad * 2 + actionBtnSize * actionCount + actionGap * (actionCount - 1);
     CGFloat toolbarH = 40;
     CGFloat x = _selection.origin.x + _selection.size.width - toolbarW;
     CGFloat y = _selection.origin.y + _selection.size.height + 8;
@@ -465,9 +585,15 @@ static id nativeOverlayKeyMonitor = nil;
     }
     x = MAX(0, MIN(x, self.bounds.size.width - toolbarW));
 
-    [_cancelButton setFrame:NSMakeRect(x, y, 74, 32)];
-    [_saveButton setFrame:NSMakeRect(x + 80, y, 64, 32)];
-    [_uploadButton setFrame:NSMakeRect(x + 150, y, 142, 32)];
+    [_actionToolbarBg setFrame:NSMakeRect(x, y, toolbarW, toolbarH)];
+
+    CGFloat btnY = y + (toolbarH - actionBtnSize) / 2;
+    CGFloat baseX = x + actionPad;
+    [_cancelButton     setFrame:NSMakeRect(baseX + (actionBtnSize + actionGap) * 0, btnY, actionBtnSize, actionBtnSize)];
+    [_clipboardButton  setFrame:NSMakeRect(baseX + (actionBtnSize + actionGap) * 1, btnY, actionBtnSize, actionBtnSize)];
+    [_saveButton       setFrame:NSMakeRect(baseX + (actionBtnSize + actionGap) * 2, btnY, actionBtnSize, actionBtnSize)];
+    [_saveRemoteButton setFrame:NSMakeRect(baseX + (actionBtnSize + actionGap) * 3, btnY, actionBtnSize, actionBtnSize)];
+    [_uploadButton     setFrame:NSMakeRect(baseX + (actionBtnSize + actionGap) * 4, btnY, actionBtnSize, actionBtnSize)];
 
     CGFloat markW = 170;
     CGFloat markX = MAX(0, MIN(_selection.origin.x, self.bounds.size.width - markW));
@@ -618,6 +744,20 @@ static id nativeOverlayKeyMonitor = nil;
 - (void)cancelSelection {
     [self closeOverlayWindow];
     nativeOverlayCancel();
+}
+
+// `saveRemoteSelection` is a placeholder action wired up to the new
+// "save to remote" toolbar button. The remote save flow is not yet
+// implemented, so we surface a transient NSAlert with a friendly
+// "coming soon" message and keep the overlay open so the user can
+// pick a different action without re-selecting the region.
+- (void)saveRemoteSelection {
+    NSAlert *alert = [[NSAlert alloc] init];
+    [alert setAlertStyle:NSAlertStyleInformational];
+    [alert setMessageText:@"暂未支持"];
+    [alert setInformativeText:@"敬请期待"];
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
 }
 @end
 
