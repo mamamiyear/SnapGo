@@ -29,8 +29,8 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:     "SnapGo",
-		Width:     900,
-		Height:    640,
+		Width:     1080,
+		Height:    720,
 		MinWidth:  720,
 		MinHeight: 520,
 		AssetServer: &assetserver.Options{

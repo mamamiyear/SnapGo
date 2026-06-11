@@ -226,8 +226,8 @@ func (a *App) runInteractiveCapture() {
 // ---------------------------------------------------------------------------
 
 const (
-	settingsWidth  = 900
-	settingsHeight = 640
+	settingsWidth  = 1080
+	settingsHeight = 720
 )
 
 // showOverlayWindow prepares the hidden main window as a borderless,
