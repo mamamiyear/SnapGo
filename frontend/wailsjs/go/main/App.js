@@ -54,8 +54,16 @@ export function SaveNativeRegionImageToDir(arg1, arg2) {
   return window['go']['main']['App']['SaveNativeRegionImageToDir'](arg1, arg2);
 }
 
+export function SaveNativeRegionToRemote(arg1) {
+  return window['go']['main']['App']['SaveNativeRegionToRemote'](arg1);
+}
+
 export function SaveRegionImage(arg1) {
   return window['go']['main']['App']['SaveRegionImage'](arg1);
+}
+
+export function SaveRegionToRemote(arg1) {
+  return window['go']['main']['App']['SaveRegionToRemote'](arg1);
 }
 
 export function ShowWindow() {
@@ -64,4 +72,8 @@ export function ShowWindow() {
 
 export function TestConnection(arg1) {
   return window['go']['main']['App']['TestConnection'](arg1);
+}
+
+export function TestSSHConnection(arg1) {
+  return window['go']['main']['App']['TestSSHConnection'](arg1);
 }

@@ -53,6 +53,32 @@ export namespace application {
 
 export namespace domain {
 	
+	export class SSHConfig {
+	    host: string;
+	    port: number;
+	    user: string;
+	    password: string;
+	    pathPrefix: string;
+	    strictHostKey: boolean;
+	    knownHostsPath: string;
+	    connectTimeoutSecs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SSHConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.user = source["user"];
+	        this.password = source["password"];
+	        this.pathPrefix = source["pathPrefix"];
+	        this.strictHostKey = source["strictHostKey"];
+	        this.knownHostsPath = source["knownHostsPath"];
+	        this.connectTimeoutSecs = source["connectTimeoutSecs"];
+	    }
+	}
 	export class S3Config {
 	    endpoint: string;
 	    region: string;
@@ -82,6 +108,7 @@ export namespace domain {
 	export class AppConfig {
 	    hotkey: string;
 	    s3: S3Config;
+	    ssh: SSHConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -91,6 +118,7 @@ export namespace domain {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.hotkey = source["hotkey"];
 	        this.s3 = this.convertValues(source["s3"], S3Config);
+	        this.ssh = this.convertValues(source["ssh"], SSHConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -111,6 +139,7 @@ export namespace domain {
 		    return a;
 		}
 	}
+	
 
 }
 

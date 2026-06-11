@@ -9,6 +9,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 
+	"github.com/mmmy/snapgo/internal/infrastructure/logging"
 	"github.com/mmmy/snapgo/internal/infrastructure/tray"
 )
 
@@ -16,6 +17,12 @@ import (
 var assets embed.FS
 
 func main() {
+	// Init logging FIRST so the rest of startup (config load, hotkey
+	// registration, tray bootstrap) is captured to ~/Library/Logs/SnapGo
+	// even when the binary was launched via `open` and stderr is /dev/null.
+	closeLog := logging.Init()
+	defer closeLog()
+
 	app := NewApp()
 
 	// Wire up the menu-bar agent. Start() returns a `start` thunk that we

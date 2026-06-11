@@ -7,6 +7,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import cancelIcon from '../assets/icons/cancel.svg?raw'
 import copyIcon from '../assets/icons/copy.svg?raw'
 import saveIcon from '../assets/icons/save-local.svg?raw'
+import saveRemoteIcon from '../assets/icons/save-remote.svg?raw'
 import uploadIcon from '../assets/icons/upload.svg?raw'
 
 interface Props {
@@ -44,6 +45,10 @@ const emit = defineEmits<{
   ): void
   (
     e: 'save',
+    payload: { rect: Rect; annotations: Annotation[] }
+  ): void
+  (
+    e: 'save-remote',
     payload: { rect: Rect; annotations: Annotation[] }
   ): void
   (e: 'cancel'): void
@@ -108,7 +113,7 @@ const sizeLabel = computed(() => {
 
 const rightToolbarPos = computed(() => {
   if (!rect.value) return null
-  return placeToolbar(rect.value, 144, 40, 'right')
+  return placeToolbar(rect.value, 180, 40, 'right')
 })
 
 const leftToolbarPos = computed(() => {
@@ -344,7 +349,11 @@ function onSave() {
   emitAction('save')
 }
 
-function emitAction(action: 'confirm' | 'copy' | 'save') {
+function onSaveRemote() {
+  emitAction('save-remote')
+}
+
+function emitAction(action: 'confirm' | 'copy' | 'save' | 'save-remote') {
   if (!rect.value) return
   const payload = {
     rect: { ...rect.value },
@@ -353,6 +362,7 @@ function emitAction(action: 'confirm' | 'copy' | 'save') {
   if (action === 'confirm') emit('confirm', payload)
   if (action === 'copy') emit('copy', payload)
   if (action === 'save') emit('save', payload)
+  if (action === 'save-remote') emit('save-remote', payload)
 }
 
 function onCancel() {
@@ -586,6 +596,13 @@ onUnmounted(() => {
         v-html="saveIcon"
       />
       <button
+        class="action-btn"
+        data-tip="保存远端"
+        aria-label="保存远端"
+        @click="onSaveRemote"
+        v-html="saveRemoteIcon"
+      />
+      <button
         class="action-btn primary"
         data-tip="上传云端"
         aria-label="上传云端"
@@ -679,7 +696,7 @@ onUnmounted(() => {
   width: 190px;
 }
 .action-toolbar {
-  width: 144px;
+  width: 180px;
 }
 
 .icon-btn,

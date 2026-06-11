@@ -24,6 +24,7 @@ import (
 	"github.com/mmmy/snapgo/internal/infrastructure/hotkey"
 	"github.com/mmmy/snapgo/internal/infrastructure/oss"
 	"github.com/mmmy/snapgo/internal/infrastructure/screencapture"
+	sshpkg "github.com/mmmy/snapgo/internal/infrastructure/ssh"
 )
 
 // App is the struct exposed to the Wails frontend through Bind.
@@ -315,6 +316,38 @@ func (a *App) runSaveImagePipeline(pngBytes []byte, dir string) (string, error) 
 	return svc.SaveImage(a.ctx, pngBytes, dir)
 }
 
+// runSaveRemotePipeline uploads the captured PNG to the configured SSH host
+// via SCP and copies a sharable reference (URL or "user@host:~/path") to
+// the clipboard.
+//
+// Why a dedicated method (vs. extending CaptureAndUploadService): SSH and
+// S3 have different config + clipboard semantics, so keeping them separate
+// avoids leaking provider-specific branches into the OSS pipeline.
+func (a *App) runSaveRemotePipeline(pngBytes []byte) error {
+	a.mu.RLock()
+	cfg := a.cfg
+	a.mu.RUnlock()
+
+	if !cfg.IsSSHConfigured() {
+		err := fmt.Errorf("SSH host/user is not configured")
+		slog.Warn("save-remote rejected: ssh not configured",
+			"host", cfg.SSH.Host, "user", cfg.SSH.User)
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return err
+	}
+	slog.Info("save-remote dispatch",
+		"host", cfg.SSH.Host, "user", cfg.SSH.User, "port", cfg.SSH.Port,
+		"png_size", len(pngBytes))
+
+	svc := &application.CaptureAndSSHService{
+		Uploader:  sshpkg.NewUploader(cfg.SSH),
+		Clipboard: a.clip,
+		Notifier:  &runtimeNotifier{ctx: a.ctx},
+		Cfg:       cfg.SSH,
+	}
+	return svc.ExecuteWithBytes(a.ctx, pngBytes)
+}
+
 func (a *App) consumePendingCapture() (*pendingCapture, error) {
 	a.pendingMu.Lock()
 	pc := a.pending
@@ -405,6 +438,20 @@ func (a *App) TestConnection(cfg domain.S3Config) error {
 		return err
 	}
 	return provider.TestConnection(a.ctx)
+}
+
+// TestSSHConnection performs a minimal SSH handshake probe against the
+// supplied configuration so the SettingsView's "Test connection" button
+// can give the user immediate feedback.
+func (a *App) TestSSHConnection(cfg domain.SSHConfig) error {
+	slog.Info("RPC TestSSHConnection",
+		"host", cfg.Host, "user", cfg.User, "port", cfg.Port,
+		"strict_host_key", cfg.StrictHostKey, "has_password", cfg.Password != "")
+	if err := sshpkg.TestConnection(a.ctx, cfg); err != nil {
+		slog.Error("RPC TestSSHConnection failed", "err", err)
+		return err
+	}
+	return nil
 }
 
 // CaptureNow is the in-app trigger.
@@ -602,6 +649,70 @@ func (a *App) SaveNativeRegionImageToDir(result CaptureResult, dir string) (Capt
 		return CaptureActionResult{}, err
 	}
 	return CaptureActionResult{Completed: true, Path: path}, nil
+}
+
+// SaveRegionToRemote uploads the user-selected region via SCP to the
+// configured SSH host. Driven by the Wails overlay's "save remote" button.
+//
+// The flow mirrors ConfirmRegion (S3 upload) but routes through
+// runSaveRemotePipeline instead. We dismiss the overlay first so the
+// upload progress (and any error toast) shows over the regular settings UI.
+func (a *App) SaveRegionToRemote(result CaptureResult) error {
+	pc, err := a.consumePendingCapture()
+	if err != nil {
+		slog.Warn("SaveRegionToRemote: no pending capture", "err", err)
+		return err
+	}
+	defer func() {
+		a.capturing.Store(false)
+		a.dismissOverlay()
+	}()
+
+	a.dismissOverlay()
+	flushFrame()
+
+	slog.Info("SaveRegionToRemote: capturing region",
+		"x", result.Rect.X, "y", result.Rect.Y,
+		"w", result.Rect.W, "h", result.Rect.H,
+		"annotations", len(result.Annotations))
+	cropped, err := a.captureSelectedPNG(result, pc)
+	if err != nil {
+		slog.Error("SaveRegionToRemote: capture failed", "err", err)
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return err
+	}
+	slog.Debug("SaveRegionToRemote: capture ok", "png_bytes", len(cropped))
+	return a.runSaveRemotePipeline(cropped)
+}
+
+// SaveNativeRegionToRemote is the macOS-native overlay equivalent of
+// SaveRegionToRemote. The AppKit panel is already closed by the time this
+// runs (see saveRemoteSelection in native_overlay_darwin.go), so we only
+// have to release the dock icon afterwards.
+func (a *App) SaveNativeRegionToRemote(result CaptureResult) error {
+	pc, err := a.consumePendingCapture()
+	if err != nil {
+		slog.Warn("SaveNativeRegionToRemote: no pending capture", "err", err)
+		return err
+	}
+	defer func() {
+		a.capturing.Store(false)
+		hideDockIcon()
+	}()
+
+	flushFrame()
+	slog.Info("SaveNativeRegionToRemote: capturing region",
+		"x", result.Rect.X, "y", result.Rect.Y,
+		"w", result.Rect.W, "h", result.Rect.H,
+		"annotations", len(result.Annotations))
+	cropped, err := a.captureSelectedPNG(result, pc)
+	if err != nil {
+		slog.Error("SaveNativeRegionToRemote: capture failed", "err", err)
+		wruntime.EventsEmit(a.ctx, "upload:failure", err.Error())
+		return err
+	}
+	slog.Debug("SaveNativeRegionToRemote: capture ok", "png_bytes", len(cropped))
+	return a.runSaveRemotePipeline(cropped)
 }
 
 func parseNativeAnnotations(raw string) []application.Annotation {

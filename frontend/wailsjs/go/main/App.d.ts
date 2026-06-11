@@ -29,8 +29,14 @@ export function SaveNativeRegionImage(arg1:main.CaptureResult):Promise<main.Capt
 
 export function SaveNativeRegionImageToDir(arg1:main.CaptureResult,arg2:string):Promise<main.CaptureActionResult>;
 
+export function SaveNativeRegionToRemote(arg1:main.CaptureResult):Promise<void>;
+
 export function SaveRegionImage(arg1:main.CaptureResult):Promise<main.CaptureActionResult>;
+
+export function SaveRegionToRemote(arg1:main.CaptureResult):Promise<void>;
 
 export function ShowWindow():Promise<void>;
 
 export function TestConnection(arg1:domain.S3Config):Promise<void>;
+
+export function TestSSHConnection(arg1:domain.SSHConfig):Promise<void>;

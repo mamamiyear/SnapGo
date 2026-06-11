@@ -23,6 +23,7 @@ import {
   ConfirmRegion,
   CopyRegionImage,
   SaveRegionImage,
+  SaveRegionToRemote,
   CancelRegion,
 } from '../wailsjs/go/main/App'
 
@@ -34,6 +35,20 @@ const hotkeyStatus = ref<HotkeyStatus>({ state: 'unknown' })
 
 type Mode = 'settings' | 'overlay'
 const mode = ref<Mode>('settings')
+
+// `SettingsTab` is hoisted to the App shell so the sidebar (which lives
+// here) and the inner SettingsView (which renders the matching card) can
+// share a single source of truth without an event bus.
+type SettingsTab = 'general' | 's3' | 'ssh'
+const activeTab = ref<SettingsTab>('general')
+
+// Sidebar entries are declarative so adding a destination type later is
+// a one-line change. The label values match the user-facing tab names.
+const sidebarItems: Array<{ id: SettingsTab; label: string }> = [
+  { id: 'general', label: 'General' },
+  { id: 's3', label: 'S3-Conf' },
+  { id: 'ssh', label: 'SSH-Conf' },
+]
 
 interface OverlayPayload {
   cssWidth: number
@@ -131,6 +146,28 @@ async function onOverlaySave(rect: {
   }
 }
 
+async function onOverlaySaveRemote(rect: {
+  rect: {
+    x: number
+    y: number
+    w: number
+    h: number
+  }
+  annotations: Array<{
+    tool: string
+    color: string
+    points: Array<{ x: number; y: number }>
+  }>
+}) {
+  mode.value = 'settings'
+  overlayPayload.value = null
+  try {
+    await SaveRegionToRemote(rect as any)
+  } catch {
+    /* Surfaced via upload:failure */
+  }
+}
+
 async function onOverlayCancel() {
   mode.value = 'settings'
   overlayPayload.value = null
@@ -191,6 +228,7 @@ onUnmounted(() => {
     @confirm="onOverlayConfirm"
     @copy="onOverlayCopy"
     @save="onOverlaySave"
+    @save-remote="onOverlaySaveRemote"
     @cancel="onOverlayCancel"
   />
 
@@ -210,10 +248,18 @@ onUnmounted(() => {
 
     <main class="main">
       <aside class="sidebar">
-        <div class="sidebar-item active"><span class="dot" /> Settings</div>
+        <div
+          v-for="item in sidebarItems"
+          :key="item.id"
+          class="sidebar-item"
+          :class="{ active: activeTab === item.id }"
+          @click="activeTab = item.id"
+        >
+          <span class="dot" /> {{ item.label }}
+        </div>
       </aside>
       <section class="content">
-        <SettingsView />
+        <SettingsView :tab="activeTab" />
       </section>
     </main>
 
@@ -304,7 +350,10 @@ onUnmounted(() => {
   border-radius: 6px;
   font-size: 13px;
   color: #374151;
-  cursor: default;
+  cursor: pointer;
+}
+.sidebar-item:hover:not(.active) {
+  background: rgba(0, 0, 0, 0.04);
 }
 .sidebar-item.active {
   background: rgba(59, 130, 246, 0.12);
@@ -340,6 +389,9 @@ onUnmounted(() => {
   }
   .sidebar-item {
     color: #d1d5db;
+  }
+  .sidebar-item:hover:not(.active) {
+    background: rgba(255, 255, 255, 0.05);
   }
   .sidebar-item.active {
     background: rgba(59, 130, 246, 0.18);

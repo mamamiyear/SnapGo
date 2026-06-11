@@ -62,6 +62,18 @@ func nativeOverlaySave(x, y, w, h C.int, annotationsJSON *C.char, dir *C.char) {
 	}()
 }
 
+//export nativeOverlaySaveRemote
+func nativeOverlaySaveRemote(x, y, w, h C.int, annotationsJSON *C.char) {
+	app := consumeNativeOverlayApp()
+	if app == nil {
+		return
+	}
+	result := nativeCaptureResult(x, y, w, h, annotationsJSON)
+	go func() {
+		_ = app.SaveNativeRegionToRemote(result)
+	}()
+}
+
 //export nativeOverlayCancel
 func nativeOverlayCancel() {
 	app := consumeNativeOverlayApp()

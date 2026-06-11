@@ -14,6 +14,7 @@ package main
 extern void nativeOverlayConfirm(int x, int y, int w, int h, const char *annotationsJSON);
 extern void nativeOverlayCopy(int x, int y, int w, int h, const char *annotationsJSON);
 extern void nativeOverlaySave(int x, int y, int w, int h, const char *annotationsJSON, const char *dir);
+extern void nativeOverlaySaveRemote(int x, int y, int w, int h, const char *annotationsJSON);
 extern void nativeOverlayCancel(void);
 
 static NSWindow *nativeOverlayWindow = nil;
@@ -783,18 +784,17 @@ static id nativeOverlayKeyMonitor = nil;
     nativeOverlayCancel();
 }
 
-// `saveRemoteSelection` is a placeholder action wired up to the new
-// "save to remote" toolbar button. The remote save flow is not yet
-// implemented, so we surface a transient NSAlert with a friendly
-// "coming soon" message and keep the overlay open so the user can
-// pick a different action without re-selecting the region.
+// `saveRemoteSelection` triggers the SCP upload flow. The overlay closes
+// immediately so the user can keep working while the transfer runs in the
+// background; success / failure surfaces through the regular Toast events.
 - (void)saveRemoteSelection {
-    NSAlert *alert = [[NSAlert alloc] init];
-    [alert setAlertStyle:NSAlertStyleInformational];
-    [alert setMessageText:@"暂未支持"];
-    [alert setInformativeText:@"敬请期待"];
-    [alert addButtonWithTitle:@"OK"];
-    [alert runModal];
+    if (!_hasSelection) {
+        return;
+    }
+    NSRect r = [self globalRectForSelection:_selection];
+    [self closeOverlayWindow];
+    NSString *json = [self annotationsJSON];
+    nativeOverlaySaveRemote((int)llround(r.origin.x), (int)llround(r.origin.y), (int)llround(r.size.width), (int)llround(r.size.height), [json UTF8String]);
 }
 @end
 
