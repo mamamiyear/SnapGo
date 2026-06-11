@@ -20,7 +20,11 @@ cd "${ROOT_DIR}"
 CERT_CN="${CERT_CN:-SnapGo Dev Cert}"
 
 # 1. Make sure wails is on PATH (works whether or not the user added it).
-export PATH="$(go env GOBIN):${PATH}"
+_GOBINPATH=$(go env GOBIN)
+if [ "${_GOBINPATH}X" == "X" ]; then
+    _GOBINPATH=$(go env GOPATH)/bin
+fi
+export PATH="${_GOBINPATH}:${PATH}"
 
 # 2. Make sure the dev cert exists. If not, abort with a clear pointer.
 if ! security find-identity -v -p codesigning | grep -q "${CERT_CN}"; then
