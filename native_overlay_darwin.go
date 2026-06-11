@@ -428,6 +428,43 @@ static id nativeOverlayKeyMonitor = nil;
         MAX(0, MIN(p.y - _selection.origin.y, _selection.size.height)));
 }
 
+// Translate a selection rectangle expressed in view-local coordinates into
+// the global top-left screen coordinate system used by
+// `/usr/sbin/screencapture -R`.
+//
+// Why this is needed:
+//   - The overlay window is created with the host screen's AppKit frame and
+//     its flipped content view yields top-left local coordinates relative
+//     to that screen only.
+//   - macOS combines all attached displays into a single virtual coordinate
+//     space whose origin is the top-left corner of the primary display
+//     (Y grows downward). `screencapture -R` interprets its arguments in
+//     that space.
+//   - Without this translation, a selection on a secondary display is sent
+//     as if it were on the primary, so screencapture crops the wrong area.
+//
+// Translation steps:
+//   1. globalX = screenFrame.origin.x + sel.origin.x
+//      (NSScreen frame origin.x is already in primary-anchored global X.)
+//   2. globalY = (primaryHeight - (screenFrame.origin.y + screenFrame.size.height)) + sel.origin.y
+//      Converts the screen's AppKit bottom-left origin to a top-left global
+//      origin, then adds the already-top-left local Y inside the view.
+- (NSRect)globalRectForSelection:(NSRect)sel {
+    NSScreen *screen = [nativeOverlayWindow screen];
+    if (screen == nil) {
+        screen = [NSScreen mainScreen];
+    }
+    if (screen == nil) {
+        return sel;
+    }
+    NSRect screenFrame = [screen frame];
+    NSScreen *primary = [[NSScreen screens] firstObject];
+    CGFloat primaryHeight = primary != nil ? [primary frame].size.height : screenFrame.size.height;
+    CGFloat globalX = screenFrame.origin.x + sel.origin.x;
+    CGFloat globalY = (primaryHeight - (screenFrame.origin.y + screenFrame.size.height)) + sel.origin.y;
+    return NSMakeRect(globalX, globalY, sel.size.width, sel.size.height);
+}
+
 - (void)mouseDown:(NSEvent *)event {
     NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
     if ([event clickCount] == 2 && _hasSelection && NSPointInRect(p, _selection)) {
@@ -701,7 +738,7 @@ static id nativeOverlayKeyMonitor = nil;
     if (!_hasSelection) {
         return;
     }
-    NSRect r = _selection;
+    NSRect r = [self globalRectForSelection:_selection];
     [self closeOverlayWindow];
     NSString *json = [self annotationsJSON];
     nativeOverlayConfirm((int)llround(r.origin.x), (int)llround(r.origin.y), (int)llround(r.size.width), (int)llround(r.size.height), [json UTF8String]);
@@ -711,7 +748,7 @@ static id nativeOverlayKeyMonitor = nil;
     if (!_hasSelection) {
         return;
     }
-    NSRect r = _selection;
+    NSRect r = [self globalRectForSelection:_selection];
     [self closeOverlayWindow];
     NSString *json = [self annotationsJSON];
     nativeOverlayCopy((int)llround(r.origin.x), (int)llround(r.origin.y), (int)llround(r.size.width), (int)llround(r.size.height), [json UTF8String]);
@@ -721,7 +758,7 @@ static id nativeOverlayKeyMonitor = nil;
     if (!_hasSelection) {
         return;
     }
-    NSRect r = _selection;
+    NSRect r = [self globalRectForSelection:_selection];
     NSString *json = [self annotationsJSON];
     [self closeOverlayWindow];
 
@@ -761,9 +798,32 @@ static id nativeOverlayKeyMonitor = nil;
 }
 @end
 
+// screenContainingCursor returns the NSScreen the cursor is currently on,
+// falling back to the main screen and then the first attached screen.
+//
+// Rationale: when an external display is attached, users expect the capture
+// overlay to appear on whichever display they were just working on.
+// `[NSEvent mouseLocation]` reports the cursor in the same global Cocoa
+// (bottom-left-origin) screen space used by `NSScreen.frame`, so a simple
+// `NSPointInRect` test against each screen's frame yields the right one.
+// Iteration over `[NSScreen screens]` is cheap (typically <=4 displays).
+static NSScreen *snipScreenContainingCursor(void) {
+    NSPoint cursor = [NSEvent mouseLocation];
+    for (NSScreen *candidate in [NSScreen screens]) {
+        if (NSPointInRect(cursor, [candidate frame])) {
+            return candidate;
+        }
+    }
+    NSScreen *fallback = [NSScreen mainScreen];
+    if (fallback != nil) {
+        return fallback;
+    }
+    return [[NSScreen screens] firstObject];
+}
+
 static void snipShowNativeOverlay(int width, int height) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSScreen *screen = [NSScreen mainScreen];
+        NSScreen *screen = snipScreenContainingCursor();
         if (screen == nil) {
             nativeOverlayCancel();
             return;
